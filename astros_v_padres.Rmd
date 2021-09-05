@@ -1,0 +1,1221 @@
+---
+title: "Baseball Win Probability Simulation"
+output: html_document
+---
+
+# Astros @ Padres Simulation
+### by Ross Woleben
+
+```{r setup, comment=""}
+```
+
+```{r include=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+```
+
+```{r echo = FALSE}
+pos <- read.csv("mlb_active_pos_players2.csv")
+pit <- read.csv("mlb_active_pitchers2.csv")
+#used to calculate league average obp for spreadsheet calculations
+h <- pos$H[pos$Year=='2021']
+ab <- pos$AB[pos$Year=='2021']
+average_ba <- sum(h)/sum(ab)
+pa <- pos$PA[pos$Year=='2021']
+
+w <- pos$BB[pos$Year=='2021']
+hbp <- pos$HBP[pos$Year=='2021']
+sf <- pos$SF[pos$Year=='2021']
+
+average_obp <- (sum(h)+sum(w)+sum(hbp))/(sum(ab)+sum(w)+sum(hbp)+sum(sf))
+
+
+total_singles <- (pos$H[pos$Year=='2021']-pos$X2B[pos$Year=='2021']-pos$X3B[pos$Year=='2021']-pos$HR[pos$Year=='2021'])
+total_doubles <- pos$X2B
+total_triples <- pos$X3B
+total_hr <- pos$HR
+
+average_single_rate <- sum(total_singles)/(sum(pa)-sum(ab)+sum(h))
+average_double_rate <- sum(total_doubles)/(sum(pa)-sum(ab)+sum(h))
+average_triple_rate <- sum(total_triples)/(sum(pa)-sum(ab)+sum(h))
+average_hr_rate <- sum(total_hr)/(sum(pa)-sum(ab)+sum(h))
+average_walk_rate <- 1-(average_single_rate+average_double_rate+average_triple_rate+average_hr_rate)
+
+batters_faced <- pit$batters_faced[pit$Year=='2021']
+so <- pit$SO[pit$Year=='2021']
+
+so_rate <- sum(so)/sum(batters_faced)
+
+at_bat <- function(pitcher_name, hitter_name, home_hitter=TRUE){
+  
+  hitter_found <- TRUE
+  pitcher_found <- TRUE
+  
+  if(length(pit$player.name[pit$player.name==pitcher_name])==0){
+    pitcher_found <- FALSE
+  }else if(as.numeric(pit$IP[pit$player.name==pitcher_name])<10){
+    pitcher_found <- FALSE
+  }
+  
+  if(length(pos$player.name[pos$player.name==hitter_name])==0){
+    hitter_found <- FALSE
+  }
+  
+  
+  
+  if(pitcher_found==TRUE){
+    if(hitter_found==TRUE){
+      obp_chance <-  pos$OBP[pos$Year=='2021' & pos$player.name==hitter_name]*as.numeric(pit$OBPM[pit$Year=='2021' & pit$player.name==pitcher_name])
+    }else{
+      obp_chance <- average_obp * as.numeric(pit$OBPM[pit$Year=='2021' & pit$player.name==pitcher_name])
+    }
+  }else{
+    if(hitter_found==TRUE){
+      obp_chance <- pos$OBP[pos$Year=='2021' & pos$player.name==hitter_name]
+    }else{
+      obp_chance <- average_obp
+    }
+  }
+  
+  if(home_hitter==TRUE){
+    obp_chance <- obp_chance * 1.024
+  }else{
+    obp_chance <- obp_chance * .976
+  }
+  
+  val <- runif(1)
+  outcome <- runif(1)
+  
+  if(val <= obp_chance){
+    
+    #Cleaning up on base outcomes
+    if(hitter_found==TRUE){ #use hitters stats
+      walk <- as.numeric(pos$Walk_percent[pos$Year=='2021' & pos$player.name==hitter_name])
+      single <- walk + as.numeric(pos$Single_percent[pos$Year=='2021' & pos$player.name==hitter_name])
+      double <- single + as.numeric(pos$Double_percent[pos$Year=='2021' & pos$player.name==hitter_name])
+      triple <- double + as.numeric(pos$triple_percent[pos$Year=='2021' & pos$player.name==hitter_name])
+      hr <- triple + as.numeric(pos$HR_percent[pos$Year=='2021' & pos$player.name==hitter_name])
+    }else{ #use league average stats
+      walk <- average_walk_rate
+      single <- walk + average_single_rate
+      double <- single + average_double_rate
+      triple <- double + average_triple_rate
+      hr <- triple + average_hr_rate
+    }
+    
+    if(outcome<=walk){
+      return("Walk")
+    }else if(outcome<=single){
+      return("Single")
+    }else if(outcome<=double){
+      return("Double")
+    }else if(outcome<=triple){
+      return("Triple")
+    }else if(outcome<= hr){
+      return("Home Run")
+    }
+    
+  }else{
+    #possible out - outcomes
+    
+    if(pitcher_found==TRUE){
+      sor <- round(as.numeric(pit$SO_rate[pit$Year=='2021'& pit$player.name==pitcher_name])/so_rate/(1-obp_chance),3)
+    }else{
+      sor <- round(1/(1-obp_chance),3)
+    }
+    
+    #https://library.fangraphs.com/pitching/batted-ball/
+    #^ league average distribution of batted balls and expected averages (for 2010 so a bit)
+    #ld: .21 with .685 average
+    #gb: .44 with .239 average
+    #fb: .24 with .207 average
+    #iffb: .11
+    so <- sor*.231
+    go <- so+.5039*(1-so)
+    ld <- go+.0996*(1-so)
+    fb <- ld+.2865*(1-so)
+    iffb <- fb+.11*(1-so)
+    
+    if(outcome <= so){
+      return("Strikeout")
+    }else if(outcome<=go){
+      return("Groundout")
+    }else if(outcome<=ld){
+      return("Lineout")
+    }else if(outcome<=fb){
+      return("Flyout")
+    }else if(outcome<=iffb){
+      return("Pop Up")
+    }
+  }
+  
+}
+
+print_score_vec <-function(vector){
+  for(i in 1:length(vector)){
+    if(i>9){
+      cat(paste('', vector[i],''))
+    }else{
+      cat(paste(vector[i], ''))
+    }
+  }
+}
+
+innings_pitched <- function(outs){
+  whole_inning <- floor(outs/3)
+  partial_inning <- 0
+  if(round(outs/3-whole_inning,1)==.3){
+    partial_inning <- .1
+  }else if(round(outs/3-whole_inning,1)==.7){
+    partial_inning <- .2
+  }
+  inning <- whole_inning + partial_inning
+  return(inning)
+}
+
+print_pitching_stats <- function(home_team_lineup, away_team_lineup){
+  cat(home_team_lineup[[2]][1]); cat(": "); cat(innings_pitched(as.numeric(home_team_lineup[[2]][2]))); cat(" IP  "); cat(home_team_lineup[[2]][3]); cat(" ER  "); 
+  cat(home_team_lineup[[2]][4]); cat(" H  "); cat(home_team_lineup[[2]][5]); cat(" BB  "); cat(home_team_lineup[[2]][6]); cat(" K\n");
+  
+  for(i in 1:length(home_team_lineup[[4]])){
+    if(home_team_lineup[[4]][[i]][2] != 0 | home_team_lineup[[4]][[i]][3] != 0 | home_team_lineup[[4]][[i]][4] != 0 | home_team_lineup[[4]][[i]][5] != 0 | home_team_lineup[[4]][[i]][6] != 0){
+      cat(home_team_lineup[[4]][[i]][1]); cat(": "); cat(innings_pitched(as.numeric(home_team_lineup[[4]][[i]][2]))); cat(" IP  "); cat(home_team_lineup[[4]][[i]][3]); cat(" ER  "); 
+      cat(home_team_lineup[[4]][[i]][4]); cat(" H  "); cat(home_team_lineup[[4]][[i]][5]); cat(" BB  "); cat(home_team_lineup[[4]][[i]][6]); cat(" K\n");
+    }
+  }
+  
+  if(home_team_lineup[[5]][2]!=0 | home_team_lineup[[5]][3]!=0 | home_team_lineup[[5]][4]!=0 | home_team_lineup[[5]][5]!=0 | home_team_lineup[[5]][6]!=0){
+    cat(home_team_lineup[[5]][1]); cat(": "); cat(innings_pitched(as.numeric(home_team_lineup[[5]][2]))); cat(" IP  "); cat(home_team_lineup[[5]][3]); cat(" ER  "); 
+    cat(home_team_lineup[[5]][4]); cat(" H  "); cat(home_team_lineup[[5]][5]); cat(" BB  "); cat(home_team_lineup[[5]][6]); cat(" K\n");
+  }
+  
+  
+  cat(away_team_lineup[[2]][1]); cat(": "); cat(innings_pitched(as.numeric(away_team_lineup[[2]][2]))); cat(" IP  "); cat(away_team_lineup[[2]][3]); cat(" ER  "); 
+  cat(away_team_lineup[[2]][4]); cat(" H  "); cat(away_team_lineup[[2]][5]); cat(" BB  "); cat(away_team_lineup[[2]][6]); cat(" K\n");
+  
+  for(i in 1:length(away_team_lineup[[4]])){
+    if(away_team_lineup[[4]][[i]][2] != 0 | away_team_lineup[[4]][[i]][3] != 0 | away_team_lineup[[4]][[i]][4] != 0 | away_team_lineup[[4]][[i]][5] != 0 | away_team_lineup[[4]][[i]][6] != 0){
+      cat(away_team_lineup[[4]][[i]][1]); cat(": "); cat(innings_pitched(as.numeric(away_team_lineup[[4]][[i]][2]))); cat(" IP  "); cat(away_team_lineup[[4]][[i]][3]); cat(" ER  "); 
+      cat(away_team_lineup[[4]][[i]][4]); cat(" H  "); cat(away_team_lineup[[4]][[i]][5]); cat(" BB  "); cat(away_team_lineup[[4]][[i]][6]); cat(" K\n");
+    }
+  }
+  if(away_team_lineup[[5]][2]!=0 | away_team_lineup[[5]][3]!=0 | away_team_lineup[[5]][4]!=0 | away_team_lineup[[5]][5]!=0 | away_team_lineup[[5]][6]!=0){
+    cat(away_team_lineup[[5]][1]); cat(": "); cat(innings_pitched(as.numeric(away_team_lineup[[5]][2]))); cat(" IP  "); cat(away_team_lineup[[5]][3]); cat(" ER  "); 
+    cat(away_team_lineup[[5]][4]); cat(" H  "); cat(away_team_lineup[[5]][5]); cat(" BB  "); cat(away_team_lineup[[5]][6]); cat(" K\n");
+  }
+  
+  
+}
+
+#currently broken for some reason
+print_batting_stats <- function(team_batting_stats, team_score){
+  for(i in 1:length(team_batting_stats)){ #1-9
+    hit_count <- 0
+    out_count <- 0
+    double_count <- 0
+    triple_count <- 0
+    hr_count <- 0
+    walk_count <- 0
+    rbi <- team_batting_stats[[i]][2]
+    hits_string <- ""
+    for(j in 3:length(team_batting_stats[[i]])){
+      #print(away_team_batting_stats[[i]][j])
+      if(team_batting_stats[[i]][j]=='Single'| team_batting_stats[[i]][j]=='Double'|team_batting_stats[[i]][j]=='Triple'|team_batting_stats[[i]][j]=='Home Run'){
+        hit_count <- hit_count+1
+        if(team_batting_stats[[i]][j]=='Home Run'){
+          hr_count <- hr_count+1
+        }
+        if(team_batting_stats[[i]][j]=='Triple'){
+          triple_count <- triple_count+1
+        }
+        if(team_batting_stats[[i]][j]=='Double'){
+          double_count <- double_count+1
+        }
+        
+      }else if(team_batting_stats[[i]][j]=="Walk"){
+        walk_count <- walk_count+1
+      }else{
+        out_count<- out_count+1
+      }
+    }
+    if(hr_count>0){
+      if(hr_count>1){
+        hits_string <- paste(hr_count, "HR,")
+      }else{
+        hits_string <- "HR,"
+      }
+    }
+    if(rbi>0){
+      if(rbi>1){
+        if(double_count>=1 | triple_count >=1){
+          hits_string <- paste(hits_string, rbi, "RBI,")
+        }else{
+          hits_string <- paste(hits_string, rbi, "RBI")
+        }
+        
+      }else{
+        if(double_count>=1 | triple_count >=1){
+          hits_string <- paste(hits_string, "RBI,")
+        }else{
+          hits_string <- paste(hits_string, "RBI")
+        }
+        
+      }
+      
+    }
+    if(triple_count>0){
+      if(triple_count>1){
+        if(double_count>=1){
+          hits_string <- paste(hits_string, triple_count, "Triple,")
+        }else{
+          hits_string <- paste(hits_string, triple_count, "Triple")
+        }
+        
+      }else{
+        if(double_count>=1){
+          hits_string <- paste(hits_string, "Triple,")
+        }else{
+          hits_string <- paste(hits_string, "Triple")
+        }
+        
+      }
+    }
+    if(double_count>0){
+      if(double_count>1){
+        hits_string <- paste(hits_string, double_count, "Double")
+      }else{
+        hits_string <- paste(hits_string, "Double")
+      }
+    }
+    if(hit_count==0 & walk_count>=1){
+      if(walk_count>1){
+        hits_string <- paste(walk_count, "BB")
+      }else{
+        hits_string <- paste("BB")
+      }
+    }
+    if(rbi>0){
+      cat(paste(team_batting_stats[[i]][1], gsub(" ","", paste(hit_count, "-", hit_count+out_count)), hits_string,"\n"))
+    }else if(sum(team_score)==0 & (i==3|i==4)){
+      cat(paste(team_batting_stats[[i]][1], gsub(" ","", paste(hit_count, "-", hit_count+out_count)), hits_string,"\n"))
+    }
+    
+  }
+}
+
+print_box_score <- function(home_team_lineup, home_score, home_hits, home_lob, home_team_batting_stats, away_team_lineup, away_score, away_hits, away_lob,away_team_batting_stats){
+  game_len = c(1:length(away_score))
+  cat("Team\t| "); cat(game_len); cat("\t|  F\t H\tLOB\n")
+  cat("----------------------------------------------------\n")
+  cat(paste(away_team_lineup[[1]], "\t| ")); print_score_vec(away_score); cat("\t|  "); cat(sum(away_score)); cat("\t", away_hits, "\t", away_lob, "\n")
+  cat("----------------------------------------------------\n")
+  cat(paste(home_team_lineup[[1]], "\t| ")); print_score_vec(home_score); cat("\t|  "); cat(sum(home_score)); cat("\t", home_hits, "\t", home_lob, "\n")
+  
+  #need to add rbi and runs
+  #print(away_team_batting_stats)
+  print_pitching_stats(home_team_lineup, away_team_lineup)
+  
+  cat(away_team_lineup[[1]],":\n")
+  print_batting_stats(away_team_batting_stats, away_score)
+  cat(home_team_lineup[[1]],":\n")
+  print_batting_stats(home_team_batting_stats, home_score)
+  
+}
+
+base_runners <- function(ab_outcome, current_baserunners, outs){
+  runs <- 0
+  
+  if(ab_outcome =='Groundout'){
+    outs <- outs +1
+    if(outs==3){
+      return(list(runs, current_baserunners, outs)) 
+    }else{ #play starts with 0 or 1 out
+      if(current_baserunners[1]==T){
+        dp_chance <- runif(1)
+        if(dp_chance<=.7){ #70% chance for dp
+          outs <- outs+1
+          if(outs==3){
+            return(list(runs, current_baserunners, outs))
+          }else{
+            if(current_baserunners[3]==T){
+              runs <- runs+1
+              current_baserunners[3]=F
+            }
+            if(current_baserunners[2]==T){
+              current_baserunners[3]=T
+              current_baserunners[2]=F
+            }
+          }
+          current_baserunners[1]=F
+        }else{
+          if(current_baserunners[3]==T){
+            runs <- runs+1
+            current_baserunners[3]=F
+          }
+          if(current_baserunners[2]==T){
+            current_baserunners[3]=T
+            current_baserunners[2]=F
+          }
+        }
+      }else{
+        if(current_baserunners[3]==T){
+          runs <- runs+1
+          current_baserunners[3]=F
+        }
+        if(current_baserunners[2]==T){
+          current_baserunners[3]=T
+          current_baserunners[2]=F
+        }
+      }
+    }
+    
+    return(list(runs, current_baserunners, outs)) 
+  }
+  if(ab_outcome=='Lineout'){
+    if(outs==2){
+      outs <- 3
+    }else{ #0 or 1 outs
+      if(current_baserunners[1]==T | current_baserunners[2]==T){
+        dp_chance <- runif(1)
+        if(dp_chance<=.02){ #2% chance for a double play
+          if(current_baserunners[1]==T & current_baserunners[2]==T){
+            first_or_second <- runif(1)
+            if(first_or_second<=.5){
+              current_baserunners[1]=F
+            }else{
+              current_baserunners[2]=F
+            }
+          }else{
+            if(current_baserunners[1]==T){
+              current_baserunners[1]=F
+            }else{
+              current_baserunners[2]=F
+            }
+          }
+          
+          outs <- outs+2
+        }else{
+          outs <- outs+1
+        }
+      }else{
+        outs <- outs+1
+      }
+    }
+    return(list(runs, current_baserunners, outs)) 
+  }
+  if(ab_outcome=='Flyout'){
+    if(outs==2){
+      outs <- 3
+    }else{ #0 or 1 outs
+      if(current_baserunners[2]==T|current_baserunners[3]==T){
+        attempt_to_tag <- runif(1)
+        if(current_baserunners[3]==T){
+          if(attempt_to_tag<=.9){ #90% chance to tag up
+            thrown_out <- runif(1)
+            if(thrown_out <=.1){ #10% chance to be thrown out at home
+              outs <- outs+2
+              current_baserunners[3]=F
+              if(current_baserunners[2]==T){
+                current_baserunners[2]=F
+                current_baserunners[3]=T
+              }
+            }else{
+              runs <- runs+1
+              current_baserunners[3]=F
+              outs <- outs +1
+            }
+          }else{ #no tag up attempt
+            outs <- outs +1
+          }
+        }else{ #there is only a runner on 2nd
+          if(attempt_to_tag<=.6){ #60% chance to attempt to tag up
+            thrown_out <- runif(1)
+            if(thrown_out<=.15){ #15% chance to be thrown out at third
+              outs <- outs+2
+              current_baserunners[2]=F
+            }else{
+              current_baserunners[3]=T
+              outs<-outs+1
+            }
+          }else{
+            outs <- outs+1
+          }
+        }
+      }else{
+        outs <- outs +1
+      }
+    }
+    return(list(runs, current_baserunners, outs)) 
+  }
+  if(ab_outcome=='Pop Up'|ab_outcome=='Strikeout'){
+    outs <- outs+1
+    return(list(runs, current_baserunners, outs)) 
+  }
+  
+  if(ab_outcome=='Walk'){
+    
+    if(current_baserunners[1]==T){
+      if(current_baserunners[2]==T){
+        if(current_baserunners[3]==T){
+          runs <- 1
+        }else{
+          current_baserunners[3]<-T
+        }
+      }else{
+        current_baserunners[2]<-T
+      }
+    }else{
+      current_baserunners[1]<-T
+    }
+    
+  }else if(ab_outcome=='Single'){
+    first_to_third <- runif(1)
+    second_to_home <- runif(1)
+    
+    if(current_baserunners[3]==T){ #runner scores on single if they start on third
+      current_baserunners[3]<-F
+      runs <- runs+1
+    }
+    if(current_baserunners[2]==T){
+      current_baserunners[2]<-F
+      if(second_to_home<=.66){ #66% for runner to move from second to home on a single
+        runs<-runs+1
+      }else{ #40% for runner to move from second to third on single
+        current_baserunners[3]<-T
+      }
+    }
+    if(current_baserunners[1]==T){
+      if(first_to_third<=.2 && current_baserunners[3]==F){ #20% runner makes it to third on a single if third is open
+        current_baserunners[3]<-T
+      }else{ #80% for runner to go from first to second on single
+        current_baserunners[2]<-T
+      } 
+    }
+    
+    current_baserunners[1]<-T
+    
+  }else if(ab_outcome=='Double'){
+    first_to_home <- runif(1)
+    second_to_home <- runif(1)
+    
+    if(current_baserunners[3]==T){
+      current_baserunners[3]<-F
+      runs <- runs+1
+    }
+    
+    if(current_baserunners[2]==T){
+      if(second_to_home<=.01 && current_baserunners[1]==F){ #1% for runner to not score from second on double
+        current_baserunners[3]<-T
+      }else{
+        runs<- runs+1
+      }
+      current_baserunners[2]<-F
+    }
+    
+    if(current_baserunners[1]==T){
+      if(first_to_home<=.47){ #47% for a runner to score from first on a double
+        runs <- runs+1
+      }else{
+        current_baserunners[3]<- T
+      }
+      current_baserunners[1]<- F
+    }
+    
+    current_baserunners[2]<-T
+    
+    
+  }else if(ab_outcome=='Triple'){
+    runs <- sum(current_baserunners)
+    current_baserunners <- c(0,0,1)
+  }else if(ab_outcome=='Home Run'){
+    runs <- sum(current_baserunners)+1
+    current_baserunners <- c(0,0,0)
+  }
+  
+  
+  return (list(runs, current_baserunners))
+}
+
+baseball_game <- function(home_team_lineup, away_team_lineup){
+  win_percentages <- data.frame(team = character(), inning_no = numeric(), batters_faced=numeric(), home=numeric(), away=numeric(), at_bat_outcome = character())
+  home_score <- c()
+  away_score <- c()
+  
+  total_home_hits <- 0
+  total_away_hits <- 0
+  total_home_lob <- 0
+  total_away_lob <- 0
+  on_base <- c(F,F,F)
+  current_home_pitcher <- 2
+  current_away_pitcher <- 2
+  home_reliever_index <- 1
+  away_reliever_index <- 1
+  home_reliever_outs <- 0
+  away_reliever_outs <- 0
+  top_inning <- TRUE
+  total_batters_faced <- 0
+  batters_this_inning <- 0
+  
+  runs <- 0 
+  outs <- 0
+  inning <- 1
+  home_index <- 1
+  away_index <- 1
+  PA_text <- ""
+  
+  if(total_batters_faced==0){
+    win_per <- win_prob_calc(win_percentages, home_team_lineup, away_team_lineup, home_score, away_score, on_base, current_home_pitcher, current_away_pitcher,
+                             home_reliever_index, away_reliever_index, home_reliever_outs, away_reliever_outs,
+                             inning, home_index, away_index, outs, total_batters_faced,sim_top_of_inning = top_inning)
+    win_percentages <- win_percentages %>% add_row(team = away_team_lineup[[1]], inning_no = inning, batters_faced= total_batters_faced, home = win_per/1000, away = 1-(win_per/1000), at_bat_outcome = NULL)
+  }
+  
+  while(TRUE){
+    #print(paste("Top of Inning",inning))
+    while(TRUE){
+      if(inning>=10){
+        on_base <- c(F,T,F)
+      }
+      
+      
+      
+      if(current_home_pitcher==2){
+        if(as.numeric(home_team_lineup[[2]][2])+as.numeric(home_team_lineup[[2]][4])+as.numeric(home_team_lineup[[2]][5]) >29 |
+           as.numeric(home_team_lineup[[2]][3])>=6 | (innings_pitched(as.numeric(home_team_lineup[[2]][2]))/as.numeric(home_team_lineup[[2]][3]) <= .8 & inning >=5) |
+           (innings_pitched(as.numeric(home_team_lineup[[2]][2]))/as.numeric(home_team_lineup[[2]][3]) <= .5 & inning >=7)){
+          current_home_pitcher = 4
+        }
+      }else if(current_home_pitcher==5){
+        if(as.numeric(home_team_lineup[[5]][3])>=2 | as.numeric(home_team_lineup[[5]][2])>=6 | as.numeric(home_team_lineup[[2]][4])+as.numeric(home_team_lineup[[2]][5]) >=4){
+          current_home_pitcher = 4
+        }
+      }else if(current_home_pitcher==4){
+        if(home_reliever_outs>=6 | home_team_lineup[[4]][[home_reliever_index]][3]>=2 | 
+           as.numeric(home_team_lineup[[4]][[home_reliever_index]][4])+as.numeric(home_team_lineup[[4]][[home_reliever_index]][5])>=3){
+          if(home_reliever_index+1 <= length(home_team_lineup[[4]])){
+            home_reliever_index <- home_reliever_index+1
+            home_reliever_outs <- 0
+          }
+        }
+      }
+      
+      
+      if((inning==9|inning==10) & sum(home_score)-sum(away_score)<=3 & sum(home_score)-sum(away_score)>=0 & as.numeric(home_team_lineup[[2]][2])+as.numeric(home_team_lineup[[2]][4])+as.numeric(home_team_lineup[[2]][5]) >29){
+        current_home_pitcher = 5
+      }
+      
+      #print(paste("inning", inning, "out",outs))
+      if(current_home_pitcher==2 | current_home_pitcher==5){
+        PA <- at_bat(home_team_lineup[[current_home_pitcher]][1],away_team_lineup[[3]][[away_index]][1])
+      }else{
+        PA <- at_bat(home_team_lineup[[4]][[home_reliever_index]][1],away_team_lineup[[3]][[away_index]][1])
+      }
+      total_batters_faced <- total_batters_faced + 1
+      batters_this_inning <- batters_this_inning + 1
+      
+      if(length(away_team_lineup[[3]][[away_index]])==1){
+        away_team_lineup[[3]][[away_index]]<-append(away_team_lineup[[3]][[away_index]],0)
+      }
+      away_team_lineup[[3]][[away_index]]<-append(away_team_lineup[[3]][[away_index]],PA)
+      
+      #print(paste("Batter: ", away_team_lineup[[3]][[away_index]][1], " in the ", away_index, "spot"))
+      #print(PA)
+      
+      
+      
+      if(PA=='Strikeout'|PA=='Groundout'|PA=='Lineout'|PA=='Flyout'|PA=='Pop Up'){
+        result <- base_runners(PA, on_base, outs)
+        on_base < result[[2]]
+        runs <- runs + result[[1]]
+        if(current_home_pitcher==2 | current_home_pitcher ==5){
+          home_team_lineup[[current_home_pitcher]][2] <- as.numeric(home_team_lineup[[current_home_pitcher]][2]) + result[[3]]-outs
+        }else{
+          home_team_lineup[[4]][[home_reliever_index]][2] <- as.numeric(home_team_lineup[[4]][[home_reliever_index]][2]) + result[[3]]-outs
+          home_reliever_outs <- home_reliever_outs + result[[3]]-outs
+        }
+        
+        outs <- result[[3]]
+        #print(paste("OUTS:", outs))
+        if(PA=='Strikeout'){
+          if(current_home_pitcher==2 | current_home_pitcher==5){
+            home_team_lineup[[current_home_pitcher]][6] <- as.numeric(home_team_lineup[[current_home_pitcher]][6]) + 1
+          }else{
+            home_team_lineup[[4]][[home_reliever_index]][6] <- as.numeric(home_team_lineup[[4]][[home_reliever_index]][6]) + 1
+          }
+          
+        }
+        
+        
+        
+      }else{
+        result <-base_runners(PA, on_base,outs)
+        on_base <- result[[2]]
+        runs <- runs+ result[[1]]
+        if(PA=='Walk'){
+          if(current_home_pitcher==2 | current_home_pitcher ==5){
+            home_team_lineup[[current_home_pitcher]][5] <- as.numeric(home_team_lineup[[current_home_pitcher]][5]) + 1
+          }else{
+            home_team_lineup[[4]][[home_reliever_index]][5] <- as.numeric(home_team_lineup[[4]][[home_reliever_index]][5]) + 1
+          }
+          
+        }else{
+          if(current_home_pitcher==2 | current_home_pitcher ==5){
+            home_team_lineup[[current_home_pitcher]][4] <- as.numeric(home_team_lineup[[current_home_pitcher]][4]) + 1
+          }else{
+            home_team_lineup[[4]][[home_reliever_index]][4] <- as.numeric(home_team_lineup[[4]][[home_reliever_index]][4]) + 1
+          }
+          
+          total_away_hits <- total_away_hits+1
+        }
+        
+      }
+      
+      
+      
+      #add any ER to pitcher
+      if(current_home_pitcher==2 | current_home_pitcher ==5){
+        home_team_lineup[[current_home_pitcher]][3] <- as.numeric(home_team_lineup[[current_home_pitcher]][3]) + result[[1]]
+      }else{
+        home_team_lineup[[current_home_pitcher]][[home_reliever_index]][3] <- as.numeric(home_team_lineup[[current_home_pitcher]][[home_reliever_index]][3]) + result[[1]]
+      }
+      
+      #determine if you need to switch out pitcher
+      
+      #add stats to hitter
+      away_team_lineup[[3]][[away_index]][2]<- as.numeric(away_team_lineup[[3]][[away_index]][2])+result[[1]]
+      
+      
+      if(away_index==9){
+        away_index <- 1
+      }else{
+        away_index <- away_index+1
+      }
+      
+      win_per <- win_prob_calc(win_percentages, home_team_lineup, away_team_lineup, home_score, c(away_score,runs), on_base, current_home_pitcher, current_away_pitcher,
+                               home_reliever_index, away_reliever_index, home_reliever_outs, away_reliever_outs,
+                               inning, home_index, away_index, outs, total_batters_faced,sim_top_of_inning = top_inning)
+      if(result[[1]] >= 1){
+        PA_text <- paste(result[[1]], "run", PA)
+      }
+      win_percentages <- win_percentages %>% add_row(team = away_team_lineup[[1]], inning_no = inning, batters_faced= total_batters_faced, home = win_per/1000, away = 1-(win_per/1000), at_bat_outcome = PA_text)
+      PA_text <- ""
+      
+      if(outs==3){
+        away_score <- append(away_score, runs)
+        runs <- 0
+        outs <- 0
+        total_away_lob <- total_away_lob + sum(on_base)
+        on_base <- c(F,F,F)
+        top_inning <- FALSE
+        break
+      }
+      
+      
+    }
+    
+    if(inning==9 & sum(home_score)>sum(away_score)){
+      break
+    }
+    
+    
+    #print(paste("Bottom of Inning", inning))
+    while(TRUE){
+      if(inning>=10){
+        on_base <- c(F,T,F)
+      }
+      
+      
+      
+      if(current_away_pitcher==2){
+        if(as.numeric(away_team_lineup[[2]][2])+as.numeric(away_team_lineup[[2]][4])+as.numeric(away_team_lineup[[2]][5]) >29 |
+           as.numeric(away_team_lineup[[2]][3])>=6 | (innings_pitched(as.numeric(away_team_lineup[[2]][2]))/as.numeric(away_team_lineup[[2]][3]) <= .8 & inning >=5) |
+           (innings_pitched(as.numeric(away_team_lineup[[2]][2]))/as.numeric(away_team_lineup[[2]][3]) <= .5 & inning >=7)){
+          current_away_pitcher = 4
+        }
+      }else if(current_away_pitcher==5){
+        if(as.numeric(away_team_lineup[[5]][3])>=2 | as.numeric(away_team_lineup[[5]][2])>=6 | as.numeric(away_team_lineup[[2]][4])+as.numeric(away_team_lineup[[2]][5]) >=4){
+          current_away_pitcher = 4
+        }
+      }else if(current_away_pitcher==4){
+        if(innings_pitched(as.numeric(away_team_lineup[[4]][[away_reliever_index]][2]))>=2 | away_team_lineup[[4]][[away_reliever_index]][3]>=2 | 
+           as.numeric(away_team_lineup[[4]][[away_reliever_index]][4])+as.numeric(away_team_lineup[[4]][[away_reliever_index]][5])>=3){
+          if(away_reliever_index+1 <= length(away_team_lineup[[4]])){
+            away_reliever_index <- away_reliever_index+1
+            away_reliever_outs <- 0
+          }
+        }
+      }
+      
+      if((inning==9|inning==10) & sum(away_score)-sum(home_score)<=3 & sum(away_score)-sum(home_score)>0 & as.numeric(away_team_lineup[[2]][2])+as.numeric(away_team_lineup[[2]][4])+as.numeric(away_team_lineup[[2]][5])>0){
+        current_away_pitcher = 5
+      }
+      
+      if(current_away_pitcher==2|current_away_pitcher==5){
+        PA <- at_bat(away_team_lineup[[current_away_pitcher]][1],home_team_lineup[[3]][[home_index]][1])
+      }else{
+        PA <- at_bat(away_team_lineup[[4]][[away_reliever_index]][1],home_team_lineup[[3]][[home_index]][1])
+      }
+      total_batters_faced <- total_batters_faced + 1
+      batters_this_inning <- batters_this_inning + 1
+      
+      if(length(home_team_lineup[[3]][[home_index]])==1){
+        home_team_lineup[[3]][[home_index]]<-append(home_team_lineup[[3]][[home_index]],0)
+      }
+      home_team_lineup[[3]][[home_index]]<-append(home_team_lineup[[3]][[home_index]],PA)
+      
+      #print(paste("Batter: ", home_team_lineup[[3]][[home_index]][1], " in the ", home_index, "spot"))
+      #print(PA)
+      
+      
+      
+      if(PA=='Strikeout'|PA=='Groundout'|PA=='Lineout'|PA=='Flyout'|PA=='Pop Up'){
+        result <- base_runners(PA, on_base, outs)
+        on_base <- result[[2]]
+        runs <- runs + result[[1]]
+        if(current_away_pitcher==2 | current_away_pitcher==5){
+          away_team_lineup[[current_away_pitcher]][2] <- as.numeric(away_team_lineup[[current_away_pitcher]][2]) + result[[3]]-outs
+        }else{
+          away_team_lineup[[4]][[away_reliever_index]][2] <- as.numeric(away_team_lineup[[4]][[away_reliever_index]][2]) + result[[3]]-outs
+          away_reliever_outs <- away_reliever_outs + result[[3]]-outs
+        }
+        
+        outs <- result[[3]]
+        #print(paste("OUTS:", outs))
+        if(PA=='Strikeout'){
+          if(current_away_pitcher==2 | current_away_pitcher==5){
+            away_team_lineup[[current_away_pitcher]][6] <- as.numeric(away_team_lineup[[current_away_pitcher]][6]) + 1
+          }else{
+            away_team_lineup[[4]][[away_reliever_index]][6] <- as.numeric(away_team_lineup[[4]][[away_reliever_index]][6]) + 1
+          }
+          
+        }
+        
+      }else{
+        result <-base_runners(PA, on_base,outs)
+        
+        on_base <- result[[2]]
+        runs <- runs+ result[[1]]
+        if(PA=='Walk'){
+          if(current_away_pitcher==2 | current_away_pitcher==5){
+            away_team_lineup[[current_away_pitcher]][5] <- as.numeric(away_team_lineup[[current_away_pitcher]][5]) + 1
+          }else{
+            away_team_lineup[[4]][[away_reliever_index]][5] <- as.numeric(away_team_lineup[[4]][[away_reliever_index]][5]) + 1
+          }
+          
+        }else{
+          if(current_away_pitcher==2 | current_away_pitcher==5){
+            away_team_lineup[[current_away_pitcher]][4] <- as.numeric(away_team_lineup[[current_away_pitcher]][4]) + 1
+          }else{
+            away_team_lineup[[4]][[away_reliever_index]][4] <- as.numeric(away_team_lineup[[4]][[away_reliever_index]][4]) + 1
+          }
+          
+          total_home_hits <- total_home_hits+1
+        }
+      }
+      #update stats for pitcher
+      if(current_away_pitcher==2 | current_away_pitcher==5){
+        away_team_lineup[[current_away_pitcher]][3] <- as.numeric(away_team_lineup[[current_away_pitcher]][3]) + result[[1]]
+      }else{
+        away_team_lineup[[4]][[away_reliever_index]][3] <- as.numeric(away_team_lineup[[4]][[away_reliever_index]][3]) + result[[1]]
+      }
+      
+      
+      #determine if you need to switch out pitcher
+      
+      #update stats for hitter
+      home_team_lineup[[3]][[home_index]][2]<- as.numeric(home_team_lineup[[3]][[home_index]][2])+result[[1]]
+      
+      if(home_index==9){
+        home_index <- 1
+      }else{
+        home_index <- home_index+1
+      }
+      win_per <- win_prob_calc(win_percentages, home_team_lineup, away_team_lineup, c(home_score,runs), away_score, on_base, current_home_pitcher, current_away_pitcher,
+                               home_reliever_index, away_reliever_index, home_reliever_outs, away_reliever_outs,
+                               inning, home_index, away_index, outs, total_batters_faced,sim_top_of_inning = top_inning)
+      if(result[[1]] >= 1){
+        PA_text <- paste(result[[1]], "run", PA)
+      }
+      win_percentages <- win_percentages %>% add_row(team = home_team_lineup[[1]],inning_no = inning, batters_faced= total_batters_faced, home = win_per/1000, away = 1-(win_per/1000), at_bat_outcome = PA_text)
+      PA_text <- ""
+      if(outs==3 | ((sum(home_score)+runs)>sum(away_score)&inning>=9)){
+        if(inning>=9 & (sum(home_score)+runs-sum(away_score))>1 & PA!='Home Run'){
+          if(runs==3){
+            runs<-2
+            PA <- "Double"
+          }else if(runs==2){
+            if(inning>=10){
+              PA <- "Single"
+            }
+            runs<-1
+          }
+        }
+        home_score <- append(home_score, runs)
+        runs <- 0
+        outs <- 0
+        
+        total_home_lob <- total_home_lob + sum(on_base)
+        on_base <- c(F,F,F)
+        top_inning <- TRUE
+        batters_this_inning <- 0
+        break
+      }
+      
+    }
+    
+    if(sum(away_score)!=sum(home_score) & inning >=9){
+      break
+    }
+    
+    inning <- inning +1
+    
+  }
+  if(sum(home_score)>sum(away_score)){
+    win_percentages <- win_percentages %>% add_row(team = NULL, inning_no = inning, batters_faced= total_batters_faced+1, home = 1, away = 0, at_bat_outcome = NULL)
+  }else{
+    win_percentages <- win_percentages %>% add_row(team = NULL, inning_no = inning, batters_faced= total_batters_faced+1, home = 0, away = 1, at_bat_outcome = NULL)
+  }
+  print_box_score(home_team_lineup,home_score,total_home_hits, total_home_lob, home_team_lineup[[3]], away_team_lineup, away_score, total_away_hits, total_away_lob, away_team_lineup[[3]])
+  return(win_percentages)
+}
+
+win_prob_calc <- function(df, home_team_lineup, away_team_lineup, sim_home_score, sim_away_score, current_on_base, sim_current_home_pitcher, sim_current_away_pitcher, 
+                          sim_home_reliever_index, sim_away_reliever_index, sim_home_reliever_outs, sim_away_reliever_outs, 
+                          current_inning, sim_home_index, sim_away_index, current_outs, total_batters_faced, sim_top_of_inning = TRUE){
+  wp_vec <- c()
+  for(i in 1:1000){
+    home_score <- c(sim_home_score)
+    away_score <- c(sim_away_score)
+    
+    on_base <- current_on_base
+    current_home_pitcher <- sim_current_home_pitcher
+    current_away_pitcher <- sim_current_away_pitcher
+    home_reliever_index <- sim_home_reliever_index
+    away_reliever_index <- sim_away_reliever_index
+    home_reliever_outs <- sim_home_reliever_index
+    away_reliever_outs <- sim_away_reliever_outs
+    
+    runs <- 0 
+    outs <- current_outs
+    inning <- current_inning
+    home_index <- sim_home_index
+    away_index <- sim_away_index
+    top_of_inning = sim_top_of_inning
+    
+    if(outs == 3){
+      if(sim_top_of_inning==TRUE){
+        top_of_inning <- FALSE
+      }else{
+        top_of_inning <- TRUE
+      }
+      outs <- 0
+    }
+    
+    while(TRUE){
+      #print(paste("Top of Inning",inning))
+      if(top_of_inning==TRUE){
+        while(TRUE){
+          if(inning>=10){
+            on_base <- c(F,T,F)
+          }
+          
+          
+          
+          if(current_home_pitcher==2){
+            if(as.numeric(home_team_lineup[[2]][2])+as.numeric(home_team_lineup[[2]][4])+as.numeric(home_team_lineup[[2]][5]) >29 |
+               as.numeric(home_team_lineup[[2]][3])>=6 | (innings_pitched(as.numeric(home_team_lineup[[2]][2]))/as.numeric(home_team_lineup[[2]][3]) <= .8 & inning >=5) |
+               (innings_pitched(as.numeric(home_team_lineup[[2]][2]))/as.numeric(home_team_lineup[[2]][3]) <= .5 & inning >=7)){
+              current_home_pitcher = 4
+            }
+          }else if(current_home_pitcher==5){
+            if(as.numeric(home_team_lineup[[5]][3])>=2 | as.numeric(home_team_lineup[[5]][2])>=6 | as.numeric(home_team_lineup[[2]][4])+as.numeric(home_team_lineup[[2]][5]) >=4){
+              current_home_pitcher = 4
+            }
+          }else if(current_home_pitcher==4){
+            if(home_reliever_outs>=6 | home_team_lineup[[4]][[home_reliever_index]][3]>=2 | 
+               as.numeric(home_team_lineup[[4]][[home_reliever_index]][4])+as.numeric(home_team_lineup[[4]][[home_reliever_index]][5])>=3){
+              if(home_reliever_index+1 <= length(home_team_lineup[[4]])){
+                home_reliever_index <- home_reliever_index+1
+                home_reliever_outs <- 0
+              }
+            }
+          }
+          
+          
+          if((inning==9|inning==10) & sum(home_score)-sum(away_score)<=3 & sum(home_score)-sum(away_score)>=0 & as.numeric(home_team_lineup[[2]][2])+as.numeric(home_team_lineup[[2]][4])+as.numeric(home_team_lineup[[2]][5]) >29){
+            current_home_pitcher = 5
+          }
+          
+          #print(paste("inning", inning, "out",outs))
+          if(current_home_pitcher==2 | current_home_pitcher==5){
+            PA <- at_bat(home_team_lineup[[current_home_pitcher]][1],away_team_lineup[[3]][[away_index]][1], home_hitter=FALSE)
+          }else{
+            PA <- at_bat(home_team_lineup[[4]][[home_reliever_index]][1],away_team_lineup[[3]][[away_index]][1],home_hitter=FALSE)
+          }
+          
+          
+          if(length(away_team_lineup[[3]][[away_index]])==1){
+            away_team_lineup[[3]][[away_index]]<-append(away_team_lineup[[3]][[away_index]],0)
+          }
+          away_team_lineup[[3]][[away_index]]<-append(away_team_lineup[[3]][[away_index]],PA)
+          
+          #print(paste("Batter: ", away_team_lineup[[3]][[away_index]][1], " in the ", away_index, "spot"))
+          #print(PA)
+          
+          
+          
+          if(PA=='Strikeout'|PA=='Groundout'|PA=='Lineout'|PA=='Flyout'|PA=='Pop Up'){
+            result <- base_runners(PA, on_base, outs)
+            on_base < result[[2]]
+            runs <- runs + result[[1]]
+            if(current_home_pitcher==2 | current_home_pitcher ==5){
+              home_team_lineup[[current_home_pitcher]][2] <- as.numeric(home_team_lineup[[current_home_pitcher]][2]) + result[[3]]-outs
+            }else{
+              home_team_lineup[[4]][[home_reliever_index]][2] <- as.numeric(home_team_lineup[[4]][[home_reliever_index]][2]) + result[[3]]-outs
+              home_reliever_outs <- home_reliever_outs + result[[3]]-outs
+            }
+            
+            outs <- result[[3]]
+            #print(paste("OUTS:", outs))
+            if(PA=='Strikeout'){
+              if(current_home_pitcher==2 | current_home_pitcher==5){
+                home_team_lineup[[current_home_pitcher]][6] <- as.numeric(home_team_lineup[[current_home_pitcher]][6]) + 1
+              }else{
+                home_team_lineup[[4]][[home_reliever_index]][6] <- as.numeric(home_team_lineup[[4]][[home_reliever_index]][6]) + 1
+              }
+              
+            }
+            
+            
+            
+          }else{
+            result <-base_runners(PA, on_base,outs)
+            on_base <- result[[2]]
+            runs <- runs+ result[[1]]
+            if(PA=='Walk'){
+              if(current_home_pitcher==2 | current_home_pitcher ==5){
+                home_team_lineup[[current_home_pitcher]][5] <- as.numeric(home_team_lineup[[current_home_pitcher]][5]) + 1
+              }else{
+                home_team_lineup[[4]][[home_reliever_index]][5] <- as.numeric(home_team_lineup[[4]][[home_reliever_index]][5]) + 1
+              }
+              
+            }else{
+              if(current_home_pitcher==2 | current_home_pitcher ==5){
+                home_team_lineup[[current_home_pitcher]][4] <- as.numeric(home_team_lineup[[current_home_pitcher]][4]) + 1
+              }else{
+                home_team_lineup[[4]][[home_reliever_index]][4] <- as.numeric(home_team_lineup[[4]][[home_reliever_index]][4]) + 1
+              }
+              
+            }
+            
+          }
+          
+          
+          if(away_index==9){
+            away_index <- 1
+          }else{
+            away_index <- away_index+1
+          }
+          
+          if(outs==3){
+            away_score <- append(away_score, runs)
+            runs <- 0
+            outs <- 0
+            on_base <- c(F,F,F)
+            top_of_inning<-FALSE
+            break
+          }
+          
+        }
+        
+        if(inning==9 & sum(home_score)>sum(away_score)){
+          break
+        }
+        
+      }
+      if(top_of_inning==FALSE){
+        #print(paste("Bottom of Inning", inning))
+        while(TRUE){
+          if(inning>=10){
+            on_base <- c(F,T,F)
+          }
+          
+          
+          
+          if(current_away_pitcher==2){
+            if(as.numeric(away_team_lineup[[2]][2])+as.numeric(away_team_lineup[[2]][4])+as.numeric(away_team_lineup[[2]][5]) >29 |
+               as.numeric(away_team_lineup[[2]][3])>=6 | (innings_pitched(as.numeric(away_team_lineup[[2]][2]))/as.numeric(away_team_lineup[[2]][3]) <= .8 & inning >=5) |
+               (innings_pitched(as.numeric(away_team_lineup[[2]][2]))/as.numeric(away_team_lineup[[2]][3]) <= .5 & inning >=7)){
+              current_away_pitcher = 4
+            }
+          }else if(current_away_pitcher==5){
+            if(as.numeric(away_team_lineup[[5]][3])>=2 | as.numeric(away_team_lineup[[5]][2])>=6 | as.numeric(away_team_lineup[[2]][4])+as.numeric(away_team_lineup[[2]][5]) >=4){
+              current_away_pitcher = 4
+            }
+          }else if(current_away_pitcher==4){
+            if(innings_pitched(as.numeric(away_team_lineup[[4]][[away_reliever_index]][2]))>=2 | away_team_lineup[[4]][[away_reliever_index]][3]>=2 | 
+               as.numeric(away_team_lineup[[4]][[away_reliever_index]][4])+as.numeric(away_team_lineup[[4]][[away_reliever_index]][5])>=3){
+              if(away_reliever_index+1 <= length(away_team_lineup[[4]])){
+                away_reliever_index <- away_reliever_index+1
+                away_reliever_outs <- 0
+              }
+            }
+          }
+          
+          if((inning==9|inning==10) & sum(away_score)-sum(home_score)<=3 & sum(away_score)-sum(home_score)>0 & as.numeric(away_team_lineup[[2]][2])+as.numeric(away_team_lineup[[2]][4])+as.numeric(away_team_lineup[[2]][5])>0){
+            current_away_pitcher = 5
+          }
+          
+          if(current_away_pitcher==2|current_away_pitcher==5){
+            PA <- at_bat(away_team_lineup[[current_away_pitcher]][1],home_team_lineup[[3]][[home_index]][1])
+          }else{
+            PA <- at_bat(away_team_lineup[[4]][[away_reliever_index]][1],home_team_lineup[[3]][[home_index]][1])
+          }
+          
+          
+          
+          if(length(home_team_lineup[[3]][[home_index]])==1){
+            home_team_lineup[[3]][[home_index]]<-append(home_team_lineup[[3]][[home_index]],0)
+          }
+          home_team_lineup[[3]][[home_index]]<-append(home_team_lineup[[3]][[home_index]],PA)
+          
+          #print(paste("Batter: ", home_team_lineup[[3]][[home_index]][1], " in the ", home_index, "spot"))
+          #print(PA)
+          
+          
+          
+          if(PA=='Strikeout'|PA=='Groundout'|PA=='Lineout'|PA=='Flyout'|PA=='Pop Up'){
+            result <- base_runners(PA, on_base, outs)
+            on_base <- result[[2]]
+            runs <- runs + result[[1]]
+            if(current_away_pitcher==2 | current_away_pitcher==5){
+              away_team_lineup[[current_away_pitcher]][2] <- as.numeric(away_team_lineup[[current_away_pitcher]][2]) + result[[3]]-outs
+            }else{
+              away_team_lineup[[4]][[away_reliever_index]][2] <- as.numeric(away_team_lineup[[4]][[away_reliever_index]][2]) + result[[3]]-outs
+              away_reliever_outs <- away_reliever_outs + result[[3]]-outs
+            }
+            
+            outs <- result[[3]]
+            #print(paste("OUTS:", outs))
+            if(PA=='Strikeout'){
+              if(current_away_pitcher==2 | current_away_pitcher==5){
+                away_team_lineup[[current_away_pitcher]][6] <- as.numeric(away_team_lineup[[current_away_pitcher]][6]) + 1
+              }else{
+                away_team_lineup[[4]][[away_reliever_index]][6] <- as.numeric(away_team_lineup[[4]][[away_reliever_index]][6]) + 1
+              }
+              
+            }
+            
+          }else{
+            result <-base_runners(PA, on_base,outs)
+            
+            on_base <- result[[2]]
+            runs <- runs+ result[[1]]
+            if(PA=='Walk'){
+              if(current_away_pitcher==2 | current_away_pitcher==5){
+                away_team_lineup[[current_away_pitcher]][5] <- as.numeric(away_team_lineup[[current_away_pitcher]][5]) + 1
+              }else{
+                away_team_lineup[[4]][[away_reliever_index]][5] <- as.numeric(away_team_lineup[[4]][[away_reliever_index]][5]) + 1
+              }
+              
+            }else{
+              if(current_away_pitcher==2 | current_away_pitcher==5){
+                away_team_lineup[[current_away_pitcher]][4] <- as.numeric(away_team_lineup[[current_away_pitcher]][4]) + 1
+              }else{
+                away_team_lineup[[4]][[away_reliever_index]][4] <- as.numeric(away_team_lineup[[4]][[away_reliever_index]][4]) + 1
+              }
+              
+              
+            }
+          }
+          
+          if(home_index==9){
+            home_index <- 1
+          }else{
+            home_index <- home_index+1
+          }
+          
+          if(outs==3 | ((sum(home_score)+runs)>sum(away_score)&inning>=9)){
+            if(inning>=9 & (sum(home_score)+runs-sum(away_score))>1 & PA!='Home Run'){
+              if(runs==3){
+                runs<-2
+                PA <- "Double"
+              }else if(runs==2){
+                if(inning>=10){
+                  PA <- "Single"
+                }
+                runs<-1
+              }
+            }
+            home_score <- append(home_score, runs)
+            runs <- 0
+            outs <- 0
+            
+            
+            on_base <- c(F,F,F)
+            top_of_inning <- TRUE
+            break
+          }
+          
+        }
+      }
+      
+      
+      if(sum(away_score)!=sum(home_score) & inning >=9){
+        break
+      }
+      
+      inning <- inning +1
+      
+    }
+    home_win <- TRUE
+    if(sum(away_score)>sum(home_score)){
+      home_win <- FALSE
+    }
+    wp_vec <- append(wp_vec, home_win)
+    
+  }
+  return(sum(wp_vec))
+}
+
+
+#AL
+#lineup structure: (Team name, starting pitcher, vector of vectors: (playername, stats), mrp pitchers, closing pitchers, possible pinch hitters)
+dodgers_lineup <- list("Trea Turner","Max Muncy", "Mookie Betts","Justin Turner", "Corey Seager", "AJ Pollock", "Chris Taylor", "Will Smith", "Julio Urias")
+dodgers_relievers <- list(c("Blake Treinen",0,0,0,0,0),c("Joe Kelly",0,0,0,0,0),c("Phil Bickford",0,0,0,0,0),c("Corey Knebel",0,0,0,0,0),c("Alex Vesia",0,0,0,0,0))
+dodgers <- list('LAD',c('Julio Urias', 0,0,0,0,0), dodgers_lineup, dodgers_relievers ,c("Kenley Jansen",0,0,0,0,0))
+
+giants_lineup <- list("Darin Ruf","Kris Bryant","Austin Slater", "Evan Longoria","Buster Posey", "Brandon Belt", "Thairo Estrada", "Mauricio Dubon", "Jay Jackson")
+giants_relievers <- list(c("Jarlin Garcia",0,0,0,0,0), c("Jose Alvarez",0,0,0,0,0), c("Dominic Leone",0,0,0,0,0),c("Tony Watson",0,0,0,0,0),c("Zack Littell",0,0,0,0,0))
+giants <- list(' SF', c('Jay Jackson', 0,0,0,0,0), giants_lineup, giants_relievers, c("Jake McGee",0,0,0,0,0))
+
+astros_lineup <- list("Michael Brantley","Aldemys Diaz", "Alex Bregman","Yordan Álvarez","Yuli Gurriel", "Carlos Correa", "Kyle Tucker", "Martin Maldonado", "Framber Valdez")
+astros_relievers <- list(c("Kendall Graveman",0,0,0,0,0), c("Ryne Stanek",0,0,0,0,0), c("Yimi Garcia",0,0,0,0,0), c("Phil Maton",0,0,0,0,0),c("Pedro Baez",0,0,0,0,0))
+astros <- list('HOU', c('Framber Valdez', 0,0,0,0,0), astros_lineup, astros_relievers, c("Ryan Pressly",0,0,0,0,0))
+
+padres_lineup <- list("Fernando Tatis Jr.","Manny Machado","Jake Cronenworth","Tommy Pham", "Wil Myers","Adam Frazier", "Austin Nola", "Jurickson Profar","Joe Musgrove")
+padres_relievers <-list(c("Daniel Hudson",0,0,0,0,0), c("Emilio Pagan",0,0,0,0,0), c("Dinelson Lamet",0,0,0,0,0),c("Austin Adams",0,0,0,0,0),c("Pierce Johnson",0,0,0,0,0))
+padres <- list('SDP', c('Joe Musgrove',0,0,0,0,0), padres_lineup, padres_relievers, c('Mark Melancon',0,0,0,0,0))
+
+```
+
+## Simulation Overview
+baseball_game() is the function that simulates the baseball game.
+After every at bat, win_probability_calc() is called, and simulates from the end of that at bat to the end of the game 1000 times. The resulting outcomes are stored in a vector, then returned to the main function where they are added to the dataframe.
+
+The baseball_game() prints a box score of the simulated game, then returns the resulting data frame.
+```{r warning=FALSE,comment=''}
+astros_vs_padres <- baseball_game(padres, astros)
+```
+
+Here is the resulting data frame of this specific game simulation.
+```{r warning=FALSE,comment=''}
+astros_vs_padres
+```
+## Plotting the Data
+
+Here is a plot of the resulting win probabilities, where the brown color is the Padres, and the orange color is the Astros
+```{r echo=TRUE}
+ggplot(astros_vs_padres, aes(x = batters_faced)) + geom_line(aes(y=home), color = 'tan4', lwd = 1.2) + geom_line(aes(y=away), color = 'darkgoldenrod1', lwd = 1.2) + scale_x_continuous(n.breaks = 9) + xlab("Total Batters Faced") + ylab("Win Percentage")
+```
+
